@@ -6,10 +6,10 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
 import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
+import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
@@ -25,16 +25,13 @@ class MainActivity : AppCompatActivity() {
     // HealthConnectClient 인스턴스
     private lateinit var healthConnectClient: HealthConnectClient
 
-    // 필요한 권한 Set
+    // 필요한 권한 Set (문자열로 정의)
     private val permissions = setOf(
-        HealthConnectClient.PermissionSpec(
-            recordType = SleepSessionRecord::class,
-            isRead = true
-        )
+        HealthPermission.getReadPermission(SleepSessionRecord::class)
     )
 
     // 권한 요청을 처리할 ActivityResultLauncher
-    private lateinit var permissionLauncher: ActivityResultLauncher<Set<HealthConnectClient.PermissionSpec>>
+    private lateinit var permissionLauncher: ActivityResultLauncher<Set<String>>
 
     // UI 요소
     private lateinit var btnFetchData: Button
@@ -65,11 +62,18 @@ class MainActivity : AppCompatActivity() {
         // HealthConnectClient 초기화
         healthConnectClient = HealthConnectClient.getOrCreate(this)
 
-        // 권한 요청 launcher 생성
-        permissionLauncher = registerForActivityResult(
-            ActivityResultContracts.RequestMultiplePermissions()
-        ) { grants ->
-            onPermissionResult(grants)
+        // 권한 요청 launcher 생성 (onCreate에서만 호출)
+        val requestPermissionActivityContract = PermissionController.createRequestPermissionResultContract()
+        permissionLauncher = registerForActivityResult(requestPermissionActivityContract) { granted ->
+            lifecycleScope.launch {
+                if (granted.containsAll(permissions)) {
+                    fetchSleepData()
+                } else {
+                    withContext(Dispatchers.Main) {
+                        tvResult.text = "권한이 거부되었습니다"
+                    }
+                }
+            }
         }
 
         // 버튼 클릭 리스너 설정
@@ -91,19 +95,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 if (!hasAllPermissions) {
-                    // 권한 요청
-                    val permissionContract = PermissionController.createRequestPermissionResultContract()
-                    val permissionLauncher = registerForActivityResult(permissionContract) { grants ->
-                        lifecycleScope.launch {
-                            if (grants.containsAll(permissions)) {
-                                fetchSleepData()
-                            } else {
-                                withContext(Dispatchers.Main) {
-                                    tvResult.text = "권한이 거부되었습니다"
-                                }
-                            }
-                        }
-                    }
+                    // 이미 onCreate에서 등록한 permissionLauncher 사용
                     permissionLauncher.launch(permissions)
                 } else {
                     // 권한이 이미 부여됨
@@ -114,19 +106,6 @@ class MainActivity : AppCompatActivity() {
                     tvResult.text = "권한 확인 중 오류: ${e.message}"
                 }
             }
-        }
-    }
-
-    // 권한 요청 결과 처리
-    private fun onPermissionResult(grants: Map<String, Boolean>) {
-        val allGranted = grants.values.all { it }
-        
-        if (allGranted) {
-            lifecycleScope.launch {
-                fetchSleepData()
-            }
-        } else {
-            tvResult.text = "권한이 거부되었습니다"
         }
     }
 
