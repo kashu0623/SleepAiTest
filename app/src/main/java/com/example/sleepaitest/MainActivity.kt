@@ -130,25 +130,51 @@ class MainActivity : AppCompatActivity() {
         try {
             Log.d(TAG, "Health Connect 설정 화면 열기 시도")
             
-            // Android 14 이상에서는 Health Connect가 시스템에 내장되어 있음
-            val intent = Intent("androidx.health.ACTION_HEALTH_CONNECT_SETTINGS")
-            
-            // Intent를 처리할 수 있는 앱이 있는지 확인
+            // 방법 1: Health Connect 메인 설정 화면
+            var intent = Intent("android.health.connect.action.HEALTH_HOME_SETTINGS")
             if (intent.resolveActivity(packageManager) != null) {
+                Log.d(TAG, "HEALTH_HOME_SETTINGS로 열기")
                 startActivity(intent)
-                tvResult.text = "Health Connect 설정을 열었습니다.\n\n설정에서 이 앱에 수면 데이터 읽기 권한을 수동으로 부여한 후 돌아와서 '수면 데이터 가져오기'를 눌러주세요."
-            } else {
-                // 대체 방법: 앱 설정 화면 열기
-                Log.d(TAG, "Health Connect 설정을 찾을 수 없음, 앱 설정 화면 열기")
-                val appSettingsIntent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.fromParts("package", packageName, null)
-                }
-                startActivity(appSettingsIntent)
-                tvResult.text = "앱 설정 화면을 열었습니다.\n권한 설정을 확인해주세요."
+                tvResult.text = "Health Connect 설정을 열었습니다.\n\n" +
+                        "설정에서:\n" +
+                        "1. '앱 권한' 또는 '데이터 및 액세스' 메뉴 찾기\n" +
+                        "2. 'SleepAiTest' 앱 찾기\n" +
+                        "3. '수면' 권한을 '읽기' 허용\n" +
+                        "4. 앱으로 돌아오기"
+                return
             }
+            
+            // 방법 2: Health Connect 권한 설정 화면
+            intent = Intent("androidx.health.ACTION_MANAGE_HEALTH_PERMISSIONS")
+            intent.putExtra("android.intent.extra.PACKAGE_NAME", packageName)
+            if (intent.resolveActivity(packageManager) != null) {
+                Log.d(TAG, "MANAGE_HEALTH_PERMISSIONS로 열기")
+                startActivity(intent)
+                tvResult.text = "Health Connect 권한 설정을 열었습니다.\n\n수면 데이터 읽기 권한을 허용한 후 돌아와주세요."
+                return
+            }
+            
+            // 방법 3: androidx.health 설정
+            intent = Intent("androidx.health.ACTION_HEALTH_CONNECT_SETTINGS")
+            if (intent.resolveActivity(packageManager) != null) {
+                Log.d(TAG, "HEALTH_CONNECT_SETTINGS로 열기")
+                startActivity(intent)
+                tvResult.text = "Health Connect 설정을 열었습니다.\n\n권한 설정에서 이 앱의 수면 데이터 읽기 권한을 허용해주세요."
+                return
+            }
+            
+            // 방법 4: 시스템 설정에서 Health Connect 찾기
+            Log.d(TAG, "Health Connect 설정을 찾을 수 없음, 시스템 설정 열기")
+            intent = Intent(android.provider.Settings.ACTION_SETTINGS)
+            startActivity(intent)
+            tvResult.text = "시스템 설정을 열었습니다.\n\n" +
+                    "다음 경로로 이동하세요:\n" +
+                    "설정 > 앱 > Health Connect (또는 건강) > 앱 권한 > SleepAiTest > 수면 읽기 허용"
+            
         } catch (e: Exception) {
             Log.e(TAG, "설정 화면 열기 실패", e)
-            tvResult.text = "설정 화면을 열 수 없습니다: ${e.message}"
+            tvResult.text = "설정 화면을 열 수 없습니다: ${e.message}\n\n" +
+                    "수동으로 설정 > 앱 > Health Connect로 이동해서 권한을 부여해주세요."
         }
     }
 
