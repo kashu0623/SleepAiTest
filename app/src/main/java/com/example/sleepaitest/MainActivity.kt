@@ -18,6 +18,12 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.pytorch.IValue
+import org.pytorch.Module
+import org.pytorch.Tensor
+import java.io.File
+import java.io.FileOutputStream
+import java.time.Duration
 import java.time.LocalDateTime
 import java.time.ZoneId
 
@@ -25,10 +31,14 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+        private const val MODEL_NAME = "model_android.ptl"
     }
 
     // HealthConnectClient 인스턴스
     private lateinit var healthConnectClient: HealthConnectClient
+
+    // PyTorch 모델
+    private var sleepModel: Module? = null
 
     // 필요한 권한 Set (문자열로 정의)
     private val permissions = setOf(
@@ -88,6 +98,9 @@ class MainActivity : AppCompatActivity() {
 
         // HealthConnectClient 초기화
         healthConnectClient = HealthConnectClient.getOrCreate(this)
+
+        // PyTorch 모델 로드
+        loadModel()
 
         // 권한 요청 launcher 생성 (onCreate에서만 호출)
         val requestPermissionActivityContract = PermissionController.createRequestPermissionResultContract()
@@ -222,11 +235,152 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // PyTorch 모델 로드
+    private fun loadModel() {
+        try {
+            Log.d(TAG, "모델 로드 시작")
+            
+            // assets 폴더에서 모델 파일을 임시 파일로 복사
+            val modelFile = assetFilePath(MODEL_NAME)
+            
+            // 모델 로드
+            sleepModel = Module.load(modelFile)
+            Log.d(TAG, "모델 로드 성공: $MODEL_NAME")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "모델 로드 실패", e)
+            sleepModel = null
+            
+            // 사용자에게 알림
+            tvResult.text = "모델 로드 실패: ${e.message}\n\n" +
+                    "assets 폴더에 $MODEL_NAME 파일이 있는지 확인해주세요."
+        }
+    }
+
+    // assets 파일을 앱 내부 저장소로 복사
+    private fun assetFilePath(assetName: String): String {
+        val file = File(filesDir, assetName)
+        
+        if (file.exists()) {
+            Log.d(TAG, "모델 파일이 이미 존재함: ${file.absolutePath}")
+            return file.absolutePath
+        }
+        
+        try {
+            assets.open(assetName).use { inputStream ->
+                FileOutputStream(file).use { outputStream ->
+                    val buffer = ByteArray(4 * 1024)
+                    var read: Int
+                    while (inputStream.read(buffer).also { read = it } != -1) {
+                        outputStream.write(buffer, 0, read)
+                    }
+                    outputStream.flush()
+                }
+            }
+            Log.d(TAG, "모델 파일 복사 완료: ${file.absolutePath}")
+            return file.absolutePath
+        } catch (e: Exception) {
+            Log.e(TAG, "모델 파일 복사 실패", e)
+            throw e
+        }
+    }
+
+    // 수면 데이터를 모델 입력 Tensor로 변환
+    private fun preprocessSleepData(sleepSessions: List<SleepSessionRecord>): Tensor {
+        // TODO: 실제 모델의 입력 형식에 맞게 수정 필요
+        // 예시: 각 수면 세션의 시작 시간, 종료 시간, 지속 시간 등을 특징으로 사용
+        
+        val features = mutableListOf<Float>()
+        
+        for (session in sleepSessions) {
+            // 수면 시작 시간 (시간 단위, 0-23)
+            val startHour = session.startTime.atZone(ZoneId.systemDefault()).hour.toFloat()
+            features.add(startHour)
+            
+            // 수면 종료 시간 (시간 단위, 0-23)
+            val endHour = session.endTime.atZone(ZoneId.systemDefault()).hour.toFloat()
+            features.add(endHour)
+            
+            // 수면 지속 시간 (시간 단위)
+            val duration = Duration.between(session.startTime, session.endTime).toMinutes() / 60.0f
+            features.add(duration)
+            
+            Log.d(TAG, "세션 특징 - 시작: $startHour, 종료: $endHour, 지속: $duration시간")
+        }
+        
+        // FloatArray로 변환
+        val inputArray = features.toFloatArray()
+        
+        // Tensor로 변환 (배치 크기 1, 특징 개수는 features.size)
+        // 모델의 입력 형태에 맞게 shape 조정 필요
+        val inputTensor = Tensor.fromBlob(inputArray, longArrayOf(1, features.size.toLong()))
+        
+        Log.d(TAG, "입력 Tensor 생성 완료 - Shape: [1, ${features.size}]")
+        return inputTensor
+    }
+
+    // 모델 추론 실행
+    private fun runInference(inputTensor: Tensor): String {
+        if (sleepModel == null) {
+            return "모델이 로드되지 않았습니다."
+        }
+        
+        try {
+            Log.d(TAG, "모델 추론 시작")
+            
+            // 모델 추론
+            val outputTensor = sleepModel!!.forward(IValue.from(inputTensor)).toTensor()
+            
+            // 출력 데이터 추출
+            val scores = outputTensor.dataAsFloatArray
+            
+            Log.d(TAG, "추론 결과: ${scores.contentToString()}")
+            
+            // TODO: 실제 모델의 출력 형식에 맞게 해석
+            // 예시: 수면 단계 분류 (0: 깊은 수면, 1: 얕은 수면, 2: REM, 3: 각성)
+            val sleepStages = arrayOf("깊은 수면", "얕은 수면", "REM 수면", "각성 상태")
+            
+            val resultText = StringBuilder()
+            resultText.append("=== 수면 단계 분석 결과 ===\n\n")
+            
+            if (scores.size == sleepStages.size) {
+                // 분류 확률로 해석
+                val maxIndex = scores.indices.maxByOrNull { scores[it] } ?: 0
+                val maxProbability = scores[maxIndex]
+                
+                resultText.append("예측된 수면 단계: ${sleepStages[maxIndex]}\n")
+                resultText.append("확률: ${String.format("%.2f", maxProbability * 100)}%\n\n")
+                resultText.append("각 단계별 확률:\n")
+                
+                for (i in scores.indices) {
+                    resultText.append("${sleepStages[i]}: ${String.format("%.2f", scores[i] * 100)}%\n")
+                }
+            } else {
+                // 다른 형식의 출력
+                resultText.append("모델 출력:\n")
+                scores.forEachIndexed { index, score ->
+                    resultText.append("Output[$index]: ${String.format("%.4f", score)}\n")
+                }
+            }
+            
+            return resultText.toString()
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "모델 추론 실패", e)
+            return "추론 실패: ${e.message}"
+        }
+    }
+
     // 수면 데이터 가져오기
     private suspend fun fetchSleepData() {
         lifecycleScope.launch {
             try {
                 Log.d(TAG, "수면 데이터 가져오기 시작")
+                
+                withContext(Dispatchers.Main) {
+                    tvResult.text = "수면 데이터를 가져오는 중..."
+                }
+                
                 // 지난 7일간의 시간 범위 정의
                 val endTime = LocalDateTime.now()
                 val startTime = endTime.minusDays(7)
@@ -256,13 +410,53 @@ class MainActivity : AppCompatActivity() {
                         val startTimeStr = firstSession.startTime.atZone(ZoneId.systemDefault()).toLocalDateTime()
                         val endTimeStr = firstSession.endTime.atZone(ZoneId.systemDefault()).toLocalDateTime()
                         
-                        tvResult.text = """
+                        var resultText = """
                             지난 7일간 ${sessionCount}개의 수면 세션 발견
                             
                             첫 번째 세션:
                             시작: $startTimeStr
                             종료: $endTimeStr
                         """.trimIndent()
+                        
+                        // 모델이 로드되어 있으면 추론 실행
+                        if (sleepModel != null) {
+                            tvResult.text = "$resultText\n\n수면 단계를 분석하는 중..."
+                            
+                            // 백그라운드 스레드에서 추론 실행
+                            withContext(Dispatchers.Default) {
+                                try {
+                                    // 데이터 전처리
+                                    val inputTensor = preprocessSleepData(response.records)
+                                    
+                                    // 모델 추론
+                                    val inferenceResult = runInference(inputTensor)
+                                    
+                                    // 결과 표시
+                                    withContext(Dispatchers.Main) {
+                                        tvResult.text = """
+                                            $resultText
+                                            
+                                            ════════════════════════
+                                            
+                                            $inferenceResult
+                                        """.trimIndent()
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "추론 중 오류", e)
+                                    withContext(Dispatchers.Main) {
+                                        tvResult.text = """
+                                            $resultText
+                                            
+                                            ════════════════════════
+                                            추론 오류: ${e.message}
+                                        """.trimIndent()
+                                    }
+                                }
+                            }
+                        } else {
+                            resultText += "\n\n⚠️ 모델이 로드되지 않아 수면 단계 분석을 수행할 수 없습니다."
+                            tvResult.text = resultText
+                        }
                     } else {
                         tvResult.text = "지난 7일간 수면 세션이 없습니다."
                     }
