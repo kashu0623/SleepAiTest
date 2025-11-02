@@ -26,6 +26,12 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.SleepAiTest">
+        
+        <!-- Health Connect 메타데이터 -->
+        <meta-data
+            android:name="android.health.connect.client.privacy_policy"
+            android:value="https://example.com/privacy" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -38,6 +44,18 @@
                 <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
             </intent-filter>
         </activity>
+        
+        <!-- Health Connect 권한 설명 액티비티 -->
+        <activity-alias
+            android:name="ViewPermissionUsageActivity"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
 
     </application>
 
