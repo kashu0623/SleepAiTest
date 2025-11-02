@@ -39,6 +39,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var permissionLauncher: ActivityResultLauncher<Set<String>>
 
     // UI 요소
+    private lateinit var btnOpenHealthConnect: Button
     private lateinit var btnFetchData: Button
     private lateinit var tvResult: TextView
 
@@ -47,26 +48,43 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         // UI 요소 찾기
+        btnOpenHealthConnect = findViewById(R.id.btn_open_health_connect)
         btnFetchData = findViewById(R.id.btn_fetch_data)
         tvResult = findViewById(R.id.tv_result)
 
         // Health Connect 설치 확인
         val availability = HealthConnectClient.getSdkStatus(this)
         Log.d(TAG, "Health Connect 상태: $availability")
-        if (availability != HealthConnectClient.SDK_AVAILABLE) {
-            Log.d(TAG, "Health Connect가 설치되어 있지 않음")
-            tvResult.text = "Health Connect가 설치되어 있지 않습니다."
-            btnFetchData.text = "Play Store에서 설치하기"
-            btnFetchData.setOnClickListener {
-                val intent = Intent(Intent.ACTION_VIEW).apply {
-                    data = Uri.parse("https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata")
-                }
-                startActivity(intent)
-            }
-            return
-        }
         
-        Log.d(TAG, "Health Connect 사용 가능")
+        when (availability) {
+            HealthConnectClient.SDK_UNAVAILABLE -> {
+                Log.d(TAG, "Health Connect SDK를 사용할 수 없음")
+                tvResult.text = "이 기기에서는 Health Connect를 사용할 수 없습니다."
+                btnFetchData.isEnabled = false
+                return
+            }
+            HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> {
+                Log.d(TAG, "Health Connect 업데이트 필요")
+                tvResult.text = "Health Connect 업데이트가 필요합니다."
+                btnFetchData.text = "업데이트하기"
+                btnFetchData.setOnClickListener {
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        data = Uri.parse("https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata")
+                    }
+                    startActivity(intent)
+                }
+                return
+            }
+            HealthConnectClient.SDK_AVAILABLE -> {
+                Log.d(TAG, "Health Connect 사용 가능")
+            }
+            else -> {
+                Log.d(TAG, "알 수 없는 상태: $availability")
+                tvResult.text = "Health Connect 상태를 확인할 수 없습니다."
+                btnFetchData.isEnabled = false
+                return
+            }
+        }
 
         // HealthConnectClient 초기화
         healthConnectClient = HealthConnectClient.getOrCreate(this)
@@ -80,17 +98,57 @@ class MainActivity : AppCompatActivity() {
                     Log.d(TAG, "모든 권한 승인됨")
                     fetchSleepData()
                 } else {
-                    Log.d(TAG, "권한 거부됨")
+                    Log.d(TAG, "권한 거부됨 또는 다이얼로그 미표시")
                     withContext(Dispatchers.Main) {
-                        tvResult.text = "권한이 거부되었습니다"
+                        // 권한 다이얼로그가 표시되지 않았거나 거부된 경우
+                        if (granted.isEmpty()) {
+                            tvResult.text = "권한 다이얼로그가 표시되지 않았습니다.\n\n" +
+                                    "'Health Connect 설정 열기' 버튼을 눌러 수동으로 권한을 부여해주세요.\n\n" +
+                                    "설정에서: 앱 및 기기 > ${packageManager.getApplicationLabel(applicationInfo)} > 권한 허용"
+                        } else {
+                            tvResult.text = "권한이 거부되었습니다.\n\n" +
+                                    "'Health Connect 설정 열기' 버튼을 눌러 권한을 부여해주세요."
+                        }
                     }
                 }
             }
         }
 
+        // Health Connect 열기 버튼 설정
+        btnOpenHealthConnect.setOnClickListener {
+            openHealthConnect()
+        }
+
         // 버튼 클릭 리스너 설정
         btnFetchData.setOnClickListener {
             checkPermissionsAndFetchData()
+        }
+    }
+
+    // Health Connect 설정 화면 열기
+    private fun openHealthConnect() {
+        try {
+            Log.d(TAG, "Health Connect 설정 화면 열기 시도")
+            
+            // Android 14 이상에서는 Health Connect가 시스템에 내장되어 있음
+            val intent = Intent("androidx.health.ACTION_HEALTH_CONNECT_SETTINGS")
+            
+            // Intent를 처리할 수 있는 앱이 있는지 확인
+            if (intent.resolveActivity(packageManager) != null) {
+                startActivity(intent)
+                tvResult.text = "Health Connect 설정을 열었습니다.\n\n설정에서 이 앱에 수면 데이터 읽기 권한을 수동으로 부여한 후 돌아와서 '수면 데이터 가져오기'를 눌러주세요."
+            } else {
+                // 대체 방법: 앱 설정 화면 열기
+                Log.d(TAG, "Health Connect 설정을 찾을 수 없음, 앱 설정 화면 열기")
+                val appSettingsIntent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", packageName, null)
+                }
+                startActivity(appSettingsIntent)
+                tvResult.text = "앱 설정 화면을 열었습니다.\n권한 설정을 확인해주세요."
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "설정 화면 열기 실패", e)
+            tvResult.text = "설정 화면을 열 수 없습니다: ${e.message}"
         }
     }
 
@@ -115,8 +173,14 @@ class MainActivity : AppCompatActivity() {
                     // permissionLauncher는 메인 스레드에서 호출되어야 함
                     withContext(Dispatchers.Main) {
                         Log.d(TAG, "권한 요청 시작")
-                        tvResult.text = "권한 요청 중..."
-                        permissionLauncher.launch(permissions)
+                        tvResult.text = "권한 요청 중...\n\n만약 권한 화면이 나타나지 않으면, Health Connect 앱을 직접 열어서 초기 설정을 완료해주세요."
+                        
+                        try {
+                            permissionLauncher.launch(permissions)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "권한 요청 실패", e)
+                            tvResult.text = "권한 요청 실패: ${e.message}\n\nHealth Connect 앱을 직접 열어보세요."
+                        }
                     }
                 } else {
                     // 권한이 이미 부여됨

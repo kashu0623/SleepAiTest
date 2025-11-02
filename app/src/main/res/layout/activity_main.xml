@@ -9,20 +9,30 @@
     tools:context=".MainActivity">
 
     <Button
+        android:id="@+id/btn_open_health_connect"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Health Connect 설정 열기"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        android:layout_marginTop="32dp" />
+
+    <Button
         android:id="@+id/btn_fetch_data"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="수면 데이터 가져오기"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        android:layout_marginTop="32dp" />
+        app:layout_constraintTop_toBottomOf="@id/btn_open_health_connect"
+        android:layout_marginTop="16dp" />
 
     <TextView
         android:id="@+id/tv_result"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:text="버튼을 눌러 수면 데이터를 가져오세요."
+        android:text="권한이 거부되면 'Health Connect 설정 열기'를 눌러 수동으로 권한을 부여해주세요.\n\n그 후 '수면 데이터 가져오기'를 눌러주세요."
         android:textSize="16sp"
         android:padding="16dp"
         app:layout_constraintTop_toBottomOf="@id/btn_fetch_data"
