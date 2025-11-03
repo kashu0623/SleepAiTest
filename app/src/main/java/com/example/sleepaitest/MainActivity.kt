@@ -305,7 +305,7 @@ class MainActivity : AppCompatActivity() {
             val duration = Duration.between(session.startTime, session.endTime).toMinutes() / 60.0f
             features.add(duration)
             
-            Log.d(TAG, "세션 특징 - 시작: $startHour, 종료: $endHour, 지속: $duration시간")
+            Log.d(TAG, "세션 특징 - 시작: $startHour, 종료: $endHour, 지속: ${duration}시간")
         }
         
         // FloatArray로 변환
