@@ -15,6 +15,11 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        
+        // PyTorch를 위한 ABI 필터
+        ndk {
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+        }
     }
 
     buildTypes {
@@ -32,6 +37,14 @@ android {
     }
     kotlinOptions {
         jvmTarget = "11"
+    }
+    
+    packaging {
+        jniLibs {
+            pickFirsts.add("lib/*/libpytorch_jni.so")
+            pickFirsts.add("lib/*/libc10.so")
+            pickFirsts.add("lib/*/libtorch_cpu.so")
+        }
     }
 }
 
