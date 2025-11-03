@@ -47,6 +47,6 @@ dependencies {
     implementation("androidx.health.connect:connect-client:1.1.0-alpha07")
     
     // PyTorch Mobile
-    implementation("org.pytorch:pytorch_android_lite:1.13.1")
-    implementation("org.pytorch:pytorch_android_torchvision_lite:1.13.1")
+    implementation("org.pytorch:pytorch_android_lite:2.1.0")
+    implementation("org.pytorch:pytorch_android_torchvision_lite:2.1.0")
 }

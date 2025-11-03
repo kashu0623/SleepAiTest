@@ -99,8 +99,10 @@ class MainActivity : AppCompatActivity() {
         // HealthConnectClient 초기화
         healthConnectClient = HealthConnectClient.getOrCreate(this)
 
-        // PyTorch 모델 로드
-        loadModel()
+        // PyTorch 모델 로드 (백그라운드 스레드에서)
+        lifecycleScope.launch(Dispatchers.IO) {
+            loadModel()
+        }
 
         // 권한 요청 launcher 생성 (onCreate에서만 호출)
         val requestPermissionActivityContract = PermissionController.createRequestPermissionResultContract()
@@ -235,25 +237,33 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // PyTorch 모델 로드
-    private fun loadModel() {
+    // PyTorch 모델 로드 (백그라운드 스레드에서 실행)
+    private suspend fun loadModel() {
         try {
             Log.d(TAG, "모델 로드 시작")
             
             // assets 폴더에서 모델 파일을 임시 파일로 복사
             val modelFile = assetFilePath(MODEL_NAME)
             
-            // 모델 로드
+            // 모델 로드 (IO 스레드에서 실행)
             sleepModel = Module.load(modelFile)
             Log.d(TAG, "모델 로드 성공: $MODEL_NAME")
+            
+            // UI 업데이트는 메인 스레드에서
+            withContext(Dispatchers.Main) {
+                tvResult.text = "✅ AI 모델 로드 완료\n\n수면 데이터를 가져올 준비가 되었습니다."
+            }
             
         } catch (e: Exception) {
             Log.e(TAG, "모델 로드 실패", e)
             sleepModel = null
             
-            // 사용자에게 알림
-            tvResult.text = "모델 로드 실패: ${e.message}\n\n" +
-                    "assets 폴더에 $MODEL_NAME 파일이 있는지 확인해주세요."
+            // 사용자에게 알림 (메인 스레드에서)
+            withContext(Dispatchers.Main) {
+                tvResult.text = "⚠️ 모델 로드 실패: ${e.message}\n\n" +
+                        "assets 폴더에 $MODEL_NAME 파일이 있는지 확인해주세요.\n\n" +
+                        "수면 데이터는 가져올 수 있지만 AI 분석은 불가능합니다."
+            }
         }
     }
 
