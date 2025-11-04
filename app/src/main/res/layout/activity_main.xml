@@ -19,13 +19,23 @@
         android:layout_marginTop="32dp" />
 
     <Button
+        android:id="@+id/btn_create_test_data"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="테스트 수면 데이터 생성"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/btn_open_health_connect"
+        android:layout_marginTop="16dp" />
+
+    <Button
         android:id="@+id/btn_fetch_data"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="수면 데이터 가져오기"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/btn_open_health_connect"
+        app:layout_constraintTop_toBottomOf="@id/btn_create_test_data"
         android:layout_marginTop="16dp" />
 
     <TextView

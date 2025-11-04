@@ -10,8 +10,8 @@ android {
     // PyTorch 라이브러리 강제 해제
     configurations.all {
         resolutionStrategy {
-            force("org.pytorch:pytorch_android_lite:2.1.0")
-            force("org.pytorch:pytorch_android_torchvision_lite:2.1.0")
+            force("org.pytorch:pytorch_android:1.13.1")
+            force("org.pytorch:pytorch_android_torchvision:1.13.1")
         }
     }
 
@@ -67,10 +67,7 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     implementation("androidx.health.connect:connect-client:1.1.0-alpha07")
     
-    // PyTorch Mobile
-    implementation("org.pytorch:pytorch_android_lite:2.1.0")
-    implementation("org.pytorch:pytorch_android_torchvision_lite:2.1.0")
-    
-    // SoLoader (PyTorch Lite에 필요)
-    implementation("com.facebook.soloader:soloader:0.10.5")
+    // PyTorch Mobile (Full 버전)
+    implementation("org.pytorch:pytorch_android:1.13.1")
+    implementation("org.pytorch:pytorch_android_torchvision:1.13.1")
 }

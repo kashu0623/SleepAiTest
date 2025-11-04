@@ -15,7 +15,6 @@ import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.lifecycle.lifecycleScope
-import com.facebook.soloader.SoLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,7 +42,8 @@ class MainActivity : AppCompatActivity() {
 
     // 필요한 권한 Set (문자열로 정의)
     private val permissions = setOf(
-        HealthPermission.getReadPermission(SleepSessionRecord::class)
+        HealthPermission.getReadPermission(SleepSessionRecord::class),
+        HealthPermission.getWritePermission(SleepSessionRecord::class)
     )
 
     // 권한 요청을 처리할 ActivityResultLauncher
@@ -51,24 +51,17 @@ class MainActivity : AppCompatActivity() {
 
     // UI 요소
     private lateinit var btnOpenHealthConnect: Button
+    private lateinit var btnCreateTestData: Button
     private lateinit var btnFetchData: Button
     private lateinit var tvResult: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // SoLoader 초기화 (PyTorch Lite에 필요)
-        try {
-            SoLoader.init(this, false)
-            Log.d(TAG, "SoLoader 초기화 성공")
-        } catch (e: Exception) {
-            Log.e(TAG, "SoLoader 초기화 실패", e)
-        }
-        
         setContentView(R.layout.activity_main)
 
         // UI 요소 찾기
         btnOpenHealthConnect = findViewById(R.id.btn_open_health_connect)
+        btnCreateTestData = findViewById(R.id.btn_create_test_data)
         btnFetchData = findViewById(R.id.btn_fetch_data)
         tvResult = findViewById(R.id.tv_result)
 
@@ -144,6 +137,11 @@ class MainActivity : AppCompatActivity() {
             openHealthConnect()
         }
 
+        // 테스트 데이터 생성 버튼 설정
+        btnCreateTestData.setOnClickListener {
+            createTestSleepData()
+        }
+
         // 버튼 클릭 리스너 설정
         btnFetchData.setOnClickListener {
             checkPermissionsAndFetchData()
@@ -200,6 +198,63 @@ class MainActivity : AppCompatActivity() {
             Log.e(TAG, "설정 화면 열기 실패", e)
             tvResult.text = "설정 화면을 열 수 없습니다: ${e.message}\n\n" +
                     "수동으로 설정 > 앱 > Health Connect로 이동해서 권한을 부여해주세요."
+        }
+    }
+
+    // 테스트 수면 데이터 생성
+    private fun createTestSleepData() {
+        lifecycleScope.launch {
+            try {
+                Log.d(TAG, "테스트 수면 데이터 생성 시작")
+                
+                withContext(Dispatchers.Main) {
+                    tvResult.text = "테스트 수면 데이터를 생성하는 중..."
+                }
+                
+                // 현재 권한 확인
+                val granted = healthConnectClient.permissionController.getGrantedPermissions()
+                val hasWritePermission = permissions.all { granted.contains(it) }
+                
+                if (!hasWritePermission) {
+                    withContext(Dispatchers.Main) {
+                        tvResult.text = "쓰기 권한이 필요합니다.\n먼저 '수면 데이터 가져오기'를 눌러 권한을 부여하세요."
+                    }
+                    return@launch
+                }
+                
+                // 지난 3일간 테스트 수면 세션 생성
+                val records = mutableListOf<SleepSessionRecord>()
+                for (daysAgo in 1..3) {
+                    val endTime = LocalDateTime.now().minusDays(daysAgo.toLong()).withHour(7).withMinute(30).withSecond(0)
+                    val startTime = endTime.minusHours(8)
+                    
+                    val sleepSession = SleepSessionRecord(
+                        startTime = startTime.atZone(ZoneId.systemDefault()).toInstant(),
+                        endTime = endTime.atZone(ZoneId.systemDefault()).toInstant(),
+                        startZoneOffset = ZoneId.systemDefault().rules.getOffset(startTime),
+                        endZoneOffset = ZoneId.systemDefault().rules.getOffset(endTime)
+                    )
+                    records.add(sleepSession)
+                    
+                    Log.d(TAG, "생성: $daysAgo일 전 수면 세션 - $startTime ~ $endTime")
+                }
+                
+                // Health Connect에 저장
+                healthConnectClient.insertRecords(records)
+                Log.d(TAG, "테스트 데이터 저장 완료: ${records.size}개")
+                
+                withContext(Dispatchers.Main) {
+                    tvResult.text = "✅ 테스트 수면 데이터 생성 완료!\n\n" +
+                            "${records.size}개의 수면 세션을 생성했습니다.\n\n" +
+                            "이제 '수면 데이터 가져오기' 버튼을 눌러\nAI 모델 분석을 확인하세요!"
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "테스트 데이터 생성 실패", e)
+                withContext(Dispatchers.Main) {
+                    tvResult.text = "테스트 데이터 생성 실패: ${e.message}"
+                }
+            }
         }
     }
 
