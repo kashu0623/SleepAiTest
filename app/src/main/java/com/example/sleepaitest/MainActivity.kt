@@ -15,6 +15,7 @@ import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.lifecycle.lifecycleScope
+import com.facebook.soloader.SoLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -55,6 +56,15 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // SoLoader 초기화 (PyTorch Lite에 필요)
+        try {
+            SoLoader.init(this, false)
+            Log.d(TAG, "SoLoader 초기화 성공")
+        } catch (e: Exception) {
+            Log.e(TAG, "SoLoader 초기화 실패", e)
+        }
+        
         setContentView(R.layout.activity_main)
 
         // UI 요소 찾기
