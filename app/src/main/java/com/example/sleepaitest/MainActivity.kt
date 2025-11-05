@@ -360,42 +360,56 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 수면 데이터를 모델 입력 Tensor로 변환
-    private fun preprocessSleepData(sleepSessions: List<SleepSessionRecord>): Tensor {
-        // TODO: 실제 모델의 입력 형식에 맞게 수정 필요
-        // 예시: 각 수면 세션의 시작 시간, 종료 시간, 지속 시간 등을 특징으로 사용
+    // 수면 데이터를 모델 입력 Tensor로 변환 (Dual Input)
+    private fun preprocessSleepData(sleepSessions: List<SleepSessionRecord>): Pair<Tensor, Tensor> {
+        // x_raw: 원시 시계열 데이터 (예: 시간별 수면 상태)
+        val rawData = mutableListOf<Float>()
         
+        // x_features: 추출된 특징 (예: 통계적 특징)
         val features = mutableListOf<Float>()
         
         for (session in sleepSessions) {
+            // === x_raw: 원시 데이터 (시간별) ===
             // 수면 시작 시간 (시간 단위, 0-23)
             val startHour = session.startTime.atZone(ZoneId.systemDefault()).hour.toFloat()
-            features.add(startHour)
+            rawData.add(startHour)
             
             // 수면 종료 시간 (시간 단위, 0-23)
             val endHour = session.endTime.atZone(ZoneId.systemDefault()).hour.toFloat()
-            features.add(endHour)
+            rawData.add(endHour)
             
+            // === x_features: 추출된 특징 ===
             // 수면 지속 시간 (시간 단위)
             val duration = Duration.between(session.startTime, session.endTime).toMinutes() / 60.0f
             features.add(duration)
             
-            Log.d(TAG, "세션 특징 - 시작: $startHour, 종료: $endHour, 지속: ${duration}시간")
+            // 시작 시간의 분 단위
+            val startMinute = session.startTime.atZone(ZoneId.systemDefault()).minute.toFloat()
+            features.add(startMinute)
+            
+            // 요일 (0=월요일, 6=일요일)
+            val dayOfWeek = session.startTime.atZone(ZoneId.systemDefault()).dayOfWeek.value.toFloat()
+            features.add(dayOfWeek)
+            
+            Log.d(TAG, "세션 - 시작: $startHour:${startMinute.toInt()}, 종료: $endHour, 지속: ${duration}h, 요일: ${dayOfWeek.toInt()}")
         }
         
-        // FloatArray로 변환
-        val inputArray = features.toFloatArray()
+        // Tensor로 변환
+        val rawArray = rawData.toFloatArray()
+        val featuresArray = features.toFloatArray()
         
-        // Tensor로 변환 (배치 크기 1, 특징 개수는 features.size)
-        // 모델의 입력 형태에 맞게 shape 조정 필요
-        val inputTensor = Tensor.fromBlob(inputArray, longArrayOf(1, features.size.toLong()))
+        // Shape: [batch_size, sequence_length] 또는 [batch_size, features]
+        // 모델에 맞게 조정 필요
+        val xRaw = Tensor.fromBlob(rawArray, longArrayOf(1, rawData.size.toLong()))
+        val xFeatures = Tensor.fromBlob(featuresArray, longArrayOf(1, features.size.toLong()))
         
-        Log.d(TAG, "입력 Tensor 생성 완료 - Shape: [1, ${features.size}]")
-        return inputTensor
+        Log.d(TAG, "입력 Tensor 생성 - x_raw: [1, ${rawData.size}], x_features: [1, ${features.size}]")
+        
+        return Pair(xRaw, xFeatures)
     }
 
-    // 모델 추론 실행
-    private fun runInference(inputTensor: Tensor): String {
+    // 모델 추론 실행 (Dual Input)
+    private fun runInference(inputTensors: Pair<Tensor, Tensor>): String {
         if (sleepModel == null) {
             return "모델이 로드되지 않았습니다."
         }
@@ -403,36 +417,47 @@ class MainActivity : AppCompatActivity() {
         try {
             Log.d(TAG, "모델 추론 시작")
             
-            // 모델 추론
-            val outputTensor = sleepModel!!.forward(IValue.from(inputTensor)).toTensor()
+            val (xRaw, xFeatures) = inputTensors
+            
+            // 모델 추론 (2개의 입력)
+            val outputTensor = sleepModel!!.forward(
+                IValue.from(xRaw),
+                IValue.from(xFeatures)
+            ).toTensor()
             
             // 출력 데이터 추출
             val scores = outputTensor.dataAsFloatArray
             
             Log.d(TAG, "추론 결과: ${scores.contentToString()}")
             
-            // TODO: 실제 모델의 출력 형식에 맞게 해석
-            // 예시: 수면 단계 분류 (0: 깊은 수면, 1: 얕은 수면, 2: REM, 3: 각성)
+            // 수면 단계 분류
             val sleepStages = arrayOf("깊은 수면", "얕은 수면", "REM 수면", "각성 상태")
             
             val resultText = StringBuilder()
-            resultText.append("=== 수면 단계 분석 결과 ===\n\n")
+            resultText.append("=== AI 수면 단계 분석 결과 ===\n\n")
             
             if (scores.size == sleepStages.size) {
                 // 분류 확률로 해석
                 val maxIndex = scores.indices.maxByOrNull { scores[it] } ?: 0
                 val maxProbability = scores[maxIndex]
                 
-                resultText.append("예측된 수면 단계: ${sleepStages[maxIndex]}\n")
-                resultText.append("확률: ${String.format("%.2f", maxProbability * 100)}%\n\n")
+                resultText.append("🌙 예측된 수면 단계: ${sleepStages[maxIndex]}\n")
+                resultText.append("📊 확률: ${String.format("%.2f", maxProbability * 100)}%\n\n")
                 resultText.append("각 단계별 확률:\n")
                 
                 for (i in scores.indices) {
-                    resultText.append("${sleepStages[i]}: ${String.format("%.2f", scores[i] * 100)}%\n")
+                    val emoji = when(i) {
+                        0 -> "😴" // 깊은 수면
+                        1 -> "😌" // 얕은 수면
+                        2 -> "💭" // REM
+                        3 -> "👀" // 각성
+                        else -> "•"
+                    }
+                    resultText.append("$emoji ${sleepStages[i]}: ${String.format("%.2f", scores[i] * 100)}%\n")
                 }
             } else {
                 // 다른 형식의 출력
-                resultText.append("모델 출력:\n")
+                resultText.append("모델 출력 (${scores.size}개):\n")
                 scores.forEachIndexed { index, score ->
                     resultText.append("Output[$index]: ${String.format("%.4f", score)}\n")
                 }
@@ -500,11 +525,11 @@ class MainActivity : AppCompatActivity() {
                             // 백그라운드 스레드에서 추론 실행
                             withContext(Dispatchers.Default) {
                                 try {
-                                    // 데이터 전처리
-                                    val inputTensor = preprocessSleepData(response.records)
+                                    // 데이터 전처리 (2개의 입력 생성)
+                                    val inputTensors = preprocessSleepData(response.records)
                                     
                                     // 모델 추론
-                                    val inferenceResult = runInference(inputTensor)
+                                    val inferenceResult = runInference(inputTensors)
                                     
                                     // 결과 표시
                                     withContext(Dispatchers.Main) {
