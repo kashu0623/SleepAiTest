@@ -236,7 +236,7 @@ class MainActivity : AppCompatActivity() {
                     )
                     records.add(sleepSession)
                     
-                    Log.d(TAG, "생성: $daysAgo일 전 수면 세션 - $startTime ~ $endTime")
+                    Log.d(TAG, "생성: ${daysAgo}일 전 수면 세션 - $startTime ~ $endTime")
                 }
                 
                 // Health Connect에 저장
