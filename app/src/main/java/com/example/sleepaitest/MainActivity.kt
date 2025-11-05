@@ -360,46 +360,41 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 수면 데이터를 모델 입력 Tensor로 변환 (Dual Input)
-    private fun preprocessSleepData(sleepSessions: List<SleepSessionRecord>): Pair<Tensor, Tensor> {
-        // x_raw: 원시 시계열 데이터 (예: 시간별 수면 상태)
+    // 단일 수면 세션을 모델 입력 Tensor로 변환 (Dual Input)
+    private fun preprocessSingleSession(session: SleepSessionRecord): Pair<Tensor, Tensor> {
+        // === x_raw: 원시 데이터 (시간별) ===
         val rawData = mutableListOf<Float>()
         
-        // x_features: 추출된 특징 (예: 통계적 특징)
+        // 수면 시작 시간 (시간 단위, 0-23)
+        val startHour = session.startTime.atZone(ZoneId.systemDefault()).hour.toFloat()
+        rawData.add(startHour)
+        
+        // 수면 종료 시간 (시간 단위, 0-23)
+        val endHour = session.endTime.atZone(ZoneId.systemDefault()).hour.toFloat()
+        rawData.add(endHour)
+        
+        // === x_features: 추출된 특징 ===
         val features = mutableListOf<Float>()
         
-        for (session in sleepSessions) {
-            // === x_raw: 원시 데이터 (시간별) ===
-            // 수면 시작 시간 (시간 단위, 0-23)
-            val startHour = session.startTime.atZone(ZoneId.systemDefault()).hour.toFloat()
-            rawData.add(startHour)
-            
-            // 수면 종료 시간 (시간 단위, 0-23)
-            val endHour = session.endTime.atZone(ZoneId.systemDefault()).hour.toFloat()
-            rawData.add(endHour)
-            
-            // === x_features: 추출된 특징 ===
-            // 수면 지속 시간 (시간 단위)
-            val duration = Duration.between(session.startTime, session.endTime).toMinutes() / 60.0f
-            features.add(duration)
-            
-            // 시작 시간의 분 단위
-            val startMinute = session.startTime.atZone(ZoneId.systemDefault()).minute.toFloat()
-            features.add(startMinute)
-            
-            // 요일 (0=월요일, 6=일요일)
-            val dayOfWeek = session.startTime.atZone(ZoneId.systemDefault()).dayOfWeek.value.toFloat()
-            features.add(dayOfWeek)
-            
-            Log.d(TAG, "세션 - 시작: $startHour:${startMinute.toInt()}, 종료: $endHour, 지속: ${duration}h, 요일: ${dayOfWeek.toInt()}")
-        }
+        // 수면 지속 시간 (시간 단위)
+        val duration = Duration.between(session.startTime, session.endTime).toMinutes() / 60.0f
+        features.add(duration)
+        
+        // 시작 시간의 분 단위
+        val startMinute = session.startTime.atZone(ZoneId.systemDefault()).minute.toFloat()
+        features.add(startMinute)
+        
+        // 요일 (0=월요일, 6=일요일)
+        val dayOfWeek = session.startTime.atZone(ZoneId.systemDefault()).dayOfWeek.value.toFloat()
+        features.add(dayOfWeek)
+        
+        Log.d(TAG, "세션 - 시작: $startHour:${startMinute.toInt()}, 종료: $endHour, 지속: ${duration}h, 요일: ${dayOfWeek.toInt()}")
         
         // Tensor로 변환
         val rawArray = rawData.toFloatArray()
         val featuresArray = features.toFloatArray()
         
-        // Shape: [batch_size, sequence_length] 또는 [batch_size, features]
-        // 모델에 맞게 조정 필요
+        // Shape: [1, 2] for x_raw, [1, 3] for x_features
         val xRaw = Tensor.fromBlob(rawArray, longArrayOf(1, rawData.size.toLong()))
         val xFeatures = Tensor.fromBlob(featuresArray, longArrayOf(1, features.size.toLong()))
         
@@ -447,15 +442,14 @@ class MainActivity : AppCompatActivity() {
             val sleepStages = arrayOf("깊은 수면", "얕은 수면", "REM 수면", "각성 상태")
             
             val resultText = StringBuilder()
-            resultText.append("=== 🤖 AI 수면 단계 분석 결과 ===\n\n")
             
             if (probabilities.size == sleepStages.size) {
                 // 가장 높은 확률의 단계 찾기
                 val maxIndex = probabilities.indices.maxByOrNull { probabilities[it] } ?: 0
                 val maxProbability = probabilities[maxIndex]
                 
-                resultText.append("🌙 예측된 수면 단계: ${sleepStages[maxIndex]}\n")
-                resultText.append("📊 신뢰도: ${String.format("%.2f", maxProbability * 100)}%\n\n")
+                resultText.append("🌙 예측 결과: ${sleepStages[maxIndex]}\n")
+                resultText.append("📊 신뢰도: ${String.format("%.1f", maxProbability * 100)}%\n\n")
                 resultText.append("각 단계별 확률:\n")
                 
                 for (i in probabilities.indices) {
@@ -466,7 +460,7 @@ class MainActivity : AppCompatActivity() {
                         3 -> "👀" // 각성
                         else -> "•"
                     }
-                    resultText.append("$emoji ${sleepStages[i]}: ${String.format("%.2f", probabilities[i] * 100)}%\n")
+                    resultText.append("$emoji ${sleepStages[i]}: ${String.format("%.1f", probabilities[i] * 100)}%\n")
                 }
             } else {
                 // 다른 형식의 출력
@@ -539,28 +533,41 @@ class MainActivity : AppCompatActivity() {
                         
                         val finalResultText = resultText.toString()
                         
-                        // 모델이 로드되어 있으면 추론 실행
+                        // 모델이 로드되어 있으면 각 세션별로 추론 실행
                         if (sleepModel != null) {
-                            tvResult.text = "$finalResultText\n\n🔄 수면 단계를 분석하는 중..."
+                            tvResult.text = "$finalResultText\n\n🔄 각 세션의 수면 단계를 분석하는 중..."
                             
                             // 백그라운드 스레드에서 추론 실행
                             withContext(Dispatchers.Default) {
                                 try {
-                                    // 데이터 전처리 (2개의 입력 생성)
-                                    val inputTensors = preprocessSleepData(response.records)
+                                    val allPredictions = StringBuilder()
+                                    allPredictions.append("\n════════════════════════\n")
+                                    allPredictions.append("🤖 AI 수면 단계 분석 결과\n")
+                                    allPredictions.append("════════════════════════\n\n")
                                     
-                                    // 모델 추론
-                                    val inferenceResult = runInference(inputTensors)
+                                    // 각 세션별로 추론
+                                    response.records.forEachIndexed { index, session ->
+                                        // 개별 세션 전처리
+                                        val inputTensors = preprocessSingleSession(session)
+                                        
+                                        // 모델 추론
+                                        val inferenceResult = runInference(inputTensors)
+                                        
+                                        // 세션 정보
+                                        val startTimeStr = session.startTime.atZone(ZoneId.systemDefault()).toLocalDateTime()
+                                        
+                                        allPredictions.append("━━━ ${index + 1}번째 세션 분석 ━━━\n")
+                                        allPredictions.append("📅 날짜: ${startTimeStr.toLocalDate()}\n")
+                                        allPredictions.append("$inferenceResult\n")
+                                        
+                                        if (index < response.records.size - 1) {
+                                            allPredictions.append("\n")
+                                        }
+                                    }
                                     
                                     // 결과 표시
                                     withContext(Dispatchers.Main) {
-                                        tvResult.text = """
-                                            $finalResultText
-                                            
-                                            ════════════════════════
-                                            
-                                            $inferenceResult
-                                        """.trimIndent()
+                                        tvResult.text = "$finalResultText${allPredictions.toString()}"
                                     }
                                 } catch (e: Exception) {
                                     Log.e(TAG, "추론 중 오류", e)
