@@ -408,6 +408,14 @@ class MainActivity : AppCompatActivity() {
         return Pair(xRaw, xFeatures)
     }
 
+    // Softmax 함수 (로짓 → 확률)
+    private fun softmax(logits: FloatArray): FloatArray {
+        val maxLogit = logits.maxOrNull() ?: 0f
+        val exps = logits.map { kotlin.math.exp((it - maxLogit).toDouble()).toFloat() }.toFloatArray()
+        val sumExps = exps.sum()
+        return exps.map { it / sumExps }.toFloatArray()
+    }
+
     // 모델 추론 실행 (Dual Input)
     private fun runInference(inputTensors: Pair<Tensor, Tensor>): String {
         if (sleepModel == null) {
@@ -425,27 +433,32 @@ class MainActivity : AppCompatActivity() {
                 IValue.from(xFeatures)
             ).toTensor()
             
-            // 출력 데이터 추출
-            val scores = outputTensor.dataAsFloatArray
+            // 출력 데이터 추출 (로짓)
+            val logits = outputTensor.dataAsFloatArray
             
-            Log.d(TAG, "추론 결과: ${scores.contentToString()}")
+            Log.d(TAG, "추론 결과 (로짓): ${logits.contentToString()}")
+            
+            // Softmax 적용하여 확률로 변환
+            val probabilities = softmax(logits)
+            
+            Log.d(TAG, "확률 변환 후: ${probabilities.contentToString()}")
             
             // 수면 단계 분류
             val sleepStages = arrayOf("깊은 수면", "얕은 수면", "REM 수면", "각성 상태")
             
             val resultText = StringBuilder()
-            resultText.append("=== AI 수면 단계 분석 결과 ===\n\n")
+            resultText.append("=== 🤖 AI 수면 단계 분석 결과 ===\n\n")
             
-            if (scores.size == sleepStages.size) {
-                // 분류 확률로 해석
-                val maxIndex = scores.indices.maxByOrNull { scores[it] } ?: 0
-                val maxProbability = scores[maxIndex]
+            if (probabilities.size == sleepStages.size) {
+                // 가장 높은 확률의 단계 찾기
+                val maxIndex = probabilities.indices.maxByOrNull { probabilities[it] } ?: 0
+                val maxProbability = probabilities[maxIndex]
                 
                 resultText.append("🌙 예측된 수면 단계: ${sleepStages[maxIndex]}\n")
-                resultText.append("📊 확률: ${String.format("%.2f", maxProbability * 100)}%\n\n")
+                resultText.append("📊 신뢰도: ${String.format("%.2f", maxProbability * 100)}%\n\n")
                 resultText.append("각 단계별 확률:\n")
                 
-                for (i in scores.indices) {
+                for (i in probabilities.indices) {
                     val emoji = when(i) {
                         0 -> "😴" // 깊은 수면
                         1 -> "😌" // 얕은 수면
@@ -453,13 +466,14 @@ class MainActivity : AppCompatActivity() {
                         3 -> "👀" // 각성
                         else -> "•"
                     }
-                    resultText.append("$emoji ${sleepStages[i]}: ${String.format("%.2f", scores[i] * 100)}%\n")
+                    resultText.append("$emoji ${sleepStages[i]}: ${String.format("%.2f", probabilities[i] * 100)}%\n")
                 }
             } else {
                 // 다른 형식의 출력
-                resultText.append("모델 출력 (${scores.size}개):\n")
-                scores.forEachIndexed { index, score ->
-                    resultText.append("Output[$index]: ${String.format("%.4f", score)}\n")
+                resultText.append("⚠️ 예상치 못한 출력 형식\n")
+                resultText.append("출력 크기: ${probabilities.size}개\n\n")
+                probabilities.forEachIndexed { index, prob ->
+                    resultText.append("Output[$index]: ${String.format("%.4f", prob)}\n")
                 }
             }
             
@@ -506,21 +520,28 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) {
                     if (response.records.isNotEmpty()) {
                         val sessionCount = response.records.size
-                        val firstSession = response.records.first()
-                        val startTimeStr = firstSession.startTime.atZone(ZoneId.systemDefault()).toLocalDateTime()
-                        val endTimeStr = firstSession.endTime.atZone(ZoneId.systemDefault()).toLocalDateTime()
                         
-                        var resultText = """
-                            지난 7일간 ${sessionCount}개의 수면 세션 발견
+                        val resultText = StringBuilder()
+                        resultText.append("📅 지난 7일간 ${sessionCount}개의 수면 세션 발견\n\n")
+                        
+                        // 모든 세션 정보 표시
+                        response.records.forEachIndexed { index, session ->
+                            val startTimeStr = session.startTime.atZone(ZoneId.systemDefault()).toLocalDateTime()
+                            val endTimeStr = session.endTime.atZone(ZoneId.systemDefault()).toLocalDateTime()
+                            val duration = Duration.between(session.startTime, session.endTime).toHours()
                             
-                            첫 번째 세션:
-                            시작: $startTimeStr
-                            종료: $endTimeStr
-                        """.trimIndent()
+                            resultText.append("━━━ ${index + 1}번째 세션 ━━━\n")
+                            resultText.append("⏰ 시작: ${startTimeStr.toLocalDate()} ${String.format("%02d:%02d", startTimeStr.hour, startTimeStr.minute)}\n")
+                            resultText.append("⏰ 종료: ${endTimeStr.toLocalDate()} ${String.format("%02d:%02d", endTimeStr.hour, endTimeStr.minute)}\n")
+                            resultText.append("⏱️  지속: ${duration}시간\n")
+                            if (index < response.records.size - 1) resultText.append("\n")
+                        }
+                        
+                        val finalResultText = resultText.toString()
                         
                         // 모델이 로드되어 있으면 추론 실행
                         if (sleepModel != null) {
-                            tvResult.text = "$resultText\n\n수면 단계를 분석하는 중..."
+                            tvResult.text = "$finalResultText\n\n🔄 수면 단계를 분석하는 중..."
                             
                             // 백그라운드 스레드에서 추론 실행
                             withContext(Dispatchers.Default) {
@@ -534,7 +555,7 @@ class MainActivity : AppCompatActivity() {
                                     // 결과 표시
                                     withContext(Dispatchers.Main) {
                                         tvResult.text = """
-                                            $resultText
+                                            $finalResultText
                                             
                                             ════════════════════════
                                             
@@ -545,17 +566,16 @@ class MainActivity : AppCompatActivity() {
                                     Log.e(TAG, "추론 중 오류", e)
                                     withContext(Dispatchers.Main) {
                                         tvResult.text = """
-                                            $resultText
+                                            $finalResultText
                                             
                                             ════════════════════════
-                                            추론 오류: ${e.message}
+                                            ❌ 추론 오류: ${e.message}
                                         """.trimIndent()
                                     }
                                 }
                             }
                         } else {
-                            resultText += "\n\n⚠️ 모델이 로드되지 않아 수면 단계 분석을 수행할 수 없습니다."
-                            tvResult.text = resultText
+                            tvResult.text = "$finalResultText\n\n⚠️ 모델이 로드되지 않아 수면 단계 분석을 수행할 수 없습니다."
                         }
                     } else {
                         tvResult.text = "지난 7일간 수면 세션이 없습니다."
