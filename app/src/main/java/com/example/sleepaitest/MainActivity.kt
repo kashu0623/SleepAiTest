@@ -516,13 +516,15 @@ class MainActivity : AppCompatActivity() {
             Log.d(TAG, "x_features 로드 완료: ${xFeaturesData.size}개 값")
             
             // === Tensor 생성 ===
-            // x_raw: [batch=1, epochs=5, sequence=1920, channels=4]
-            val xRaw = Tensor.fromBlob(xRawData, longArrayOf(1, 5, 1920, 4))
+            // x_raw: [batch=1, sequence=5*1920, channels=4]
+            // 5개 epoch를 하나의 긴 시퀀스로 concat
+            val xRaw = Tensor.fromBlob(xRawData, longArrayOf(1, 5 * 1920, 4))
             
-            // x_features: [batch=1, epochs=5, features=5]
-            val xFeatures = Tensor.fromBlob(xFeaturesData, longArrayOf(1, 5, 5))
+            // x_features: [batch=1, features=5*5]
+            // 5개 epoch의 features를 flatten
+            val xFeatures = Tensor.fromBlob(xFeaturesData, longArrayOf(1, 5 * 5))
             
-            Log.d(TAG, "Tensor 생성 완료 - x_raw: [1, 5, 1920, 4], x_features: [1, 5, 5]")
+            Log.d(TAG, "Tensor 생성 완료 - x_raw: [1, ${5*1920}, 4], x_features: [1, ${5*5}]")
             
             return Pair(xRaw, xFeatures)
             
@@ -568,10 +570,10 @@ class MainActivity : AppCompatActivity() {
                 
                 withContext(Dispatchers.Main) {
                     tvResult.text = "✅ 데이터 로드 완료!\n\n" +
-                            "📊 x_raw: [1, 5, 1920, 4]\n" +
-                            "   (5 epochs × 1920 samples × 4 channels)\n\n" +
-                            "📊 x_features: [1, 5, 5]\n" +
-                            "   (5 epochs × 5 features)\n\n" +
+                            "📊 x_raw: [1, 9600, 4]\n" +
+                            "   (5 epochs × 1920 = 9600 samples × 4 channels)\n\n" +
+                            "📊 x_features: [1, 25]\n" +
+                            "   (5 epochs × 5 = 25 features)\n\n" +
                             "🔄 모델 추론 실행 중..."
                 }
                 
