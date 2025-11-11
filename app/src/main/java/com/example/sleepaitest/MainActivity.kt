@@ -52,6 +52,7 @@ class MainActivity : AppCompatActivity() {
     // UI 요소
     private lateinit var btnOpenHealthConnect: Button
     private lateinit var btnCreateTestData: Button
+    private lateinit var btnTestDreamt: Button
     private lateinit var btnFetchData: Button
     private lateinit var tvResult: TextView
 
@@ -62,6 +63,7 @@ class MainActivity : AppCompatActivity() {
         // UI 요소 찾기
         btnOpenHealthConnect = findViewById(R.id.btn_open_health_connect)
         btnCreateTestData = findViewById(R.id.btn_create_test_data)
+        btnTestDreamt = findViewById(R.id.btn_test_dreamt)
         btnFetchData = findViewById(R.id.btn_fetch_data)
         tvResult = findViewById(R.id.tv_result)
 
@@ -140,6 +142,11 @@ class MainActivity : AppCompatActivity() {
         // 테스트 데이터 생성 버튼 설정
         btnCreateTestData.setOnClickListener {
             createTestSleepData()
+        }
+
+        // DreamT 샘플 테스트 버튼 설정
+        btnTestDreamt.setOnClickListener {
+            testWithDreamTSample()
         }
 
         // 버튼 클릭 리스너 설정
@@ -476,6 +483,178 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "모델 추론 실패", e)
             return "추론 실패: ${e.message}"
+        }
+    }
+
+    // DreamT 샘플 데이터 로드 (텍스트 파일에서)
+    private fun loadDreamTSample(): Pair<Tensor, Tensor>? {
+        try {
+            Log.d(TAG, "DreamT 샘플 로드 시작")
+            
+            // === x_raw 로드: [1, 5, 1920, 4] ===
+            val rawText = assets.open("sample_raw1.txt").bufferedReader().use { it.readText() }
+            val rawValues = rawText.trim().split("\\s+".toRegex()).map { it.toFloat() }
+            
+            if (rawValues.size != 5 * 1920 * 4) {
+                Log.e(TAG, "x_raw 크기 오류: 예상 ${5 * 1920 * 4}, 실제 ${rawValues.size}")
+                return null
+            }
+            
+            val xRawData = rawValues.toFloatArray()
+            Log.d(TAG, "x_raw 로드 완료: ${xRawData.size}개 값")
+            
+            // === x_features 로드: [1, 5, 5] ===
+            val featuresText = assets.open("sample_features1.txt").bufferedReader().use { it.readText() }
+            val featuresValues = featuresText.trim().split("\\s+".toRegex()).map { it.toFloat() }
+            
+            if (featuresValues.size != 5 * 5) {
+                Log.e(TAG, "x_features 크기 오류: 예상 ${5 * 5}, 실제 ${featuresValues.size}")
+                return null
+            }
+            
+            val xFeaturesData = featuresValues.toFloatArray()
+            Log.d(TAG, "x_features 로드 완료: ${xFeaturesData.size}개 값")
+            
+            // === Tensor 생성 ===
+            // x_raw: [batch=1, epochs=5, sequence=1920, channels=4]
+            val xRaw = Tensor.fromBlob(xRawData, longArrayOf(1, 5, 1920, 4))
+            
+            // x_features: [batch=1, epochs=5, features=5]
+            val xFeatures = Tensor.fromBlob(xFeaturesData, longArrayOf(1, 5, 5))
+            
+            Log.d(TAG, "Tensor 생성 완료 - x_raw: [1, 5, 1920, 4], x_features: [1, 5, 5]")
+            
+            return Pair(xRaw, xFeatures)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "DreamT 샘플 로드 실패", e)
+            return null
+        }
+    }
+
+    // DreamT 샘플로 테스트
+    private fun testWithDreamTSample() {
+        lifecycleScope.launch(Dispatchers.Default) {
+            try {
+                withContext(Dispatchers.Main) {
+                    tvResult.text = "🧪 DreamT 샘플 데이터로 테스트하는 중...\n\n" +
+                            "5개 epoch (2.5분 분량) 로드 중..."
+                }
+                
+                // 모델 체크
+                if (sleepModel == null) {
+                    withContext(Dispatchers.Main) {
+                        tvResult.text = "❌ 모델이 로드되지 않았습니다.\n\n" +
+                                "잠시 기다렸다가 다시 시도해주세요."
+                    }
+                    return@launch
+                }
+                
+                // DreamT 샘플 로드
+                val sample = loadDreamTSample()
+                
+                if (sample == null) {
+                    withContext(Dispatchers.Main) {
+                        tvResult.text = "❌ DreamT 샘플을 로드할 수 없습니다.\n\n" +
+                                "app/src/main/assets/ 폴더에\n" +
+                                "- sample_raw1.txt\n" +
+                                "- sample_features1.txt\n" +
+                                "파일이 있는지 확인해주세요."
+                    }
+                    return@launch
+                }
+                
+                val (xRaw, xFeatures) = sample
+                
+                withContext(Dispatchers.Main) {
+                    tvResult.text = "✅ 데이터 로드 완료!\n\n" +
+                            "📊 x_raw: [1, 5, 1920, 4]\n" +
+                            "   (5 epochs × 1920 samples × 4 channels)\n\n" +
+                            "📊 x_features: [1, 5, 5]\n" +
+                            "   (5 epochs × 5 features)\n\n" +
+                            "🔄 모델 추론 실행 중..."
+                }
+                
+                // 모델 추론
+                Log.d(TAG, "모델 추론 시작 (5 epochs)")
+                
+                val outputTensor = sleepModel!!.forward(
+                    IValue.from(xRaw),
+                    IValue.from(xFeatures)
+                ).toTensor()
+                
+                val logits = outputTensor.dataAsFloatArray
+                Log.d(TAG, "추론 결과 (로짓): ${logits.contentToString()}")
+                
+                // Softmax 적용
+                val probabilities = softmax(logits)
+                Log.d(TAG, "확률 변환 후: ${probabilities.contentToString()}")
+                
+                val sleepStages = arrayOf("깊은 수면", "얕은 수면", "REM 수면", "각성 상태")
+                
+                // 결과 표시
+                withContext(Dispatchers.Main) {
+                    val resultText = StringBuilder()
+                    resultText.append("🧪 DreamT 실제 데이터 테스트 결과\n")
+                    resultText.append("════════════════════════\n\n")
+                    resultText.append("📊 입력 데이터:\n")
+                    resultText.append("- 5개 epoch (각 30초, 총 2.5분)\n")
+                    resultText.append("- 센서: PPG, 3축 가속도계\n")
+                    resultText.append("- 샘플링: 64Hz\n\n")
+                    
+                    if (probabilities.size == sleepStages.size) {
+                        // 가장 높은 확률의 단계 찾기
+                        val maxIndex = probabilities.indices.maxByOrNull { probabilities[it] } ?: 0
+                        val maxProbability = probabilities[maxIndex]
+                        
+                        resultText.append("🌙 예측된 수면 단계:\n")
+                        resultText.append("   ${sleepStages[maxIndex]}\n\n")
+                        resultText.append("📊 신뢰도:\n")
+                        resultText.append("   ${String.format("%.1f", maxProbability * 100)}%\n\n")
+                        resultText.append("════════════════════════\n")
+                        resultText.append("각 단계별 확률:\n\n")
+                        
+                        for (i in probabilities.indices) {
+                            val emoji = when(i) {
+                                0 -> "😴" // 깊은 수면
+                                1 -> "😌" // 얕은 수면
+                                2 -> "💭" // REM
+                                3 -> "👀" // 각성
+                                else -> "•"
+                            }
+                            val barLength = (probabilities[i] * 20).toInt()
+                            val bar = "█".repeat(barLength) + "░".repeat(20 - barLength)
+                            
+                            resultText.append("$emoji ${sleepStages[i]}:\n")
+                            resultText.append("   $bar\n")
+                            resultText.append("   ${String.format("%.1f", probabilities[i] * 100)}%\n\n")
+                        }
+                        
+                        resultText.append("════════════════════════\n")
+                        resultText.append("✅ 추론 완료!\n\n")
+                        resultText.append("이 결과는 실제 DreamT 데이터셋의\n")
+                        resultText.append("센서 데이터를 사용한 것입니다.")
+                        
+                    } else {
+                        // 예상치 못한 출력 형식
+                        resultText.append("⚠️ 예상치 못한 출력 형식\n")
+                        resultText.append("출력 크기: ${probabilities.size}개\n\n")
+                        probabilities.forEachIndexed { index, prob ->
+                            resultText.append("Output[$index]: ${String.format("%.4f", prob)}\n")
+                        }
+                    }
+                    
+                    tvResult.text = resultText.toString()
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "DreamT 테스트 실패", e)
+                withContext(Dispatchers.Main) {
+                    tvResult.text = "❌ 테스트 실패\n\n" +
+                            "오류: ${e.message}\n\n" +
+                            "스택 트레이스:\n${e.stackTraceToString()}"
+                }
+            }
         }
     }
 
