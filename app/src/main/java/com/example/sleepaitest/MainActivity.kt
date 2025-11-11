@@ -445,8 +445,9 @@ class MainActivity : AppCompatActivity() {
             
             Log.d(TAG, "확률 변환 후: ${probabilities.contentToString()}")
             
-            // 수면 단계 분류
-            val sleepStages = arrayOf("깊은 수면", "얕은 수면", "REM 수면", "각성 상태")
+            // 수면 단계 분류 (Python 학습 시 매핑과 동일)
+            // 인덱스 0: Wake, 1: Light, 2: Deep, 3: REM
+            val sleepStages = arrayOf("각성 상태", "얕은 수면", "깊은 수면", "REM 수면")
             
             val resultText = StringBuilder()
             
@@ -461,10 +462,10 @@ class MainActivity : AppCompatActivity() {
                 
                 for (i in probabilities.indices) {
                     val emoji = when(i) {
-                        0 -> "😴" // 깊은 수면
+                        0 -> "👀" // 각성
                         1 -> "😌" // 얕은 수면
-                        2 -> "💭" // REM
-                        3 -> "👀" // 각성
+                        2 -> "😴" // 깊은 수면
+                        3 -> "💭" // REM
                         else -> "•"
                     }
                     resultText.append("$emoji ${sleepStages[i]}: ${String.format("%.1f", probabilities[i] * 100)}%\n")
@@ -587,9 +588,11 @@ class MainActivity : AppCompatActivity() {
                 
                 val logits = outputTensor.dataAsFloatArray
                 Log.d(TAG, "추론 결과 (로짓): ${logits.contentToString()}")
-                Log.d(TAG, "출력 크기: ${logits.size}개 (예상: 5 epochs × 4 classes = 20)")
+                Log.d(TAG, "출력 크기: ${logits.size}개")
                 
-                val sleepStages = arrayOf("깊은 수면", "얕은 수면", "REM 수면", "각성 상태")
+                // 수면 단계 분류 (Python 학습 시 매핑과 동일)
+                // 인덱스 0: Wake, 1: Light, 2: Deep, 3: REM
+                val sleepStages = arrayOf("각성 상태", "얕은 수면", "깊은 수면", "REM 수면")
                 
                 // 결과 표시
                 withContext(Dispatchers.Main) {
@@ -599,17 +602,51 @@ class MainActivity : AppCompatActivity() {
                     resultText.append("📊 입력 데이터:\n")
                     resultText.append("- 5개 epoch (각 30초, 총 2.5분)\n")
                     resultText.append("- 센서: PPG, 3축 가속도계\n")
-                    resultText.append("- 샘플링: 64Hz\n\n")
+                    resultText.append("- 샘플링: 64Hz\n")
+                    resultText.append("- 컨텍스트 윈도우 방식 (앞뒤 2개씩)\n\n")
                     
-                    if (logits.size == 20) {
-                        // 5개 epoch 각각 처리
+                    if (logits.size == 4) {
+                        // 단일 예측 (5개 epoch의 컨텍스트를 보고 1개 예측)
+                        val probabilities = softmax(logits)
+                        val maxIndex = probabilities.indices.maxByOrNull { probabilities[it] } ?: 0
+                        val maxProbability = probabilities[maxIndex]
+                        
+                        resultText.append("🌙 예측된 수면 단계:\n")
+                        resultText.append("   ${sleepStages[maxIndex]}\n\n")
+                        resultText.append("📊 신뢰도:\n")
+                        resultText.append("   ${String.format("%.1f", maxProbability * 100)}%\n\n")
+                        resultText.append("════════════════════════\n")
+                        resultText.append("각 단계별 확률:\n\n")
+                        
+                        for (i in probabilities.indices) {
+                            val emoji = when(i) {
+                                0 -> "👀" // 각성
+                                1 -> "😌" // 얕은 수면
+                                2 -> "😴" // 깊은 수면
+                                3 -> "💭" // REM
+                                else -> "•"
+                            }
+                            val barLength = (probabilities[i] * 20).toInt()
+                            val bar = "█".repeat(barLength) + "░".repeat(20 - barLength)
+                            
+                            resultText.append("$emoji ${sleepStages[i]}:\n")
+                            resultText.append("   $bar\n")
+                            resultText.append("   ${String.format("%.1f", probabilities[i] * 100)}%\n\n")
+                        }
+                        
+                        resultText.append("════════════════════════\n")
+                        resultText.append("✅ 분석 완료!\n\n")
+                        resultText.append("💡 이 모델은 5개 epoch (2.5분)의\n")
+                        resultText.append("컨텍스트를 보고 가운데 epoch를\n")
+                        resultText.append("예측합니다 (77% 정확도)")
+                        
+                    } else if (logits.size == 20) {
+                        // 5개 epoch 각각 예측 (만약을 위한 코드)
                         for (epoch in 0 until 5) {
-                            // 각 epoch의 로짓 추출 (4개씩)
                             val epochLogits = FloatArray(4) { i ->
                                 logits[epoch * 4 + i]
                             }
                             
-                            // Softmax 적용
                             val probabilities = softmax(epochLogits)
                             val maxIndex = probabilities.indices.maxByOrNull { probabilities[it] } ?: 0
                             
@@ -619,10 +656,10 @@ class MainActivity : AppCompatActivity() {
                             
                             for (i in probabilities.indices) {
                                 val emoji = when(i) {
-                                    0 -> "😴"
-                                    1 -> "😌"
-                                    2 -> "💭"
-                                    3 -> "👀"
+                                    0 -> "👀" // 각성
+                                    1 -> "😌" // 얕은 수면
+                                    2 -> "😴" // 깊은 수면
+                                    3 -> "💭" // REM
                                     else -> "•"
                                 }
                                 resultText.append("  $emoji ${sleepStages[i]}: ${String.format("%.1f", probabilities[i] * 100)}%\n")
@@ -631,13 +668,14 @@ class MainActivity : AppCompatActivity() {
                         }
                         
                         resultText.append("════════════════════════\n")
-                        resultText.append("✅ 5개 epoch (총 2.5분) 분석 완료!")
+                        resultText.append("✅ 5개 epoch 분석 완료!")
                         
                     } else {
                         // 예상치 못한 출력 형식
                         resultText.append("⚠️ 예상치 못한 출력 크기\n")
                         resultText.append("출력: ${logits.size}개 값\n")
-                        resultText.append("예상: 20개 (5 epochs × 4 classes)\n\n")
+                        resultText.append("예상: 4개 (1 예측 × 4 classes)\n")
+                        resultText.append("또는: 20개 (5 epochs × 4 classes)\n\n")
                         resultText.append("로짓 값:\n")
                         logits.forEachIndexed { index, value ->
                             resultText.append("[$index]: ${String.format("%.4f", value)}\n")
