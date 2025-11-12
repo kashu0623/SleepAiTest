@@ -1,10 +1,14 @@
 package com.example.sleepaitest
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import android.view.View
 import android.widget.Button
+import android.widget.EditText
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.result.ActivityResultLauncher
 import androidx.appcompat.app.AppCompatActivity
@@ -21,11 +25,92 @@ import kotlinx.coroutines.withContext
 import org.pytorch.IValue
 import org.pytorch.Module
 import org.pytorch.Tensor
+import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStreamReader
 import java.time.Duration
 import java.time.LocalDateTime
 import java.time.ZoneId
+
+data class SleepTestData(
+    val rawDataArray: FloatArray,
+    val featureDataArray: FloatArray
+)
+
+private fun loadSampleDataFromAssets(context: Context, rawFileName: String, featureFileName: String): SleepTestData {
+    // 1. Raw 데이터 읽기
+    val rawDataList = mutableListOf<Float>()
+    context.assets.open(rawFileName).use { stream ->
+        BufferedReader(InputStreamReader(stream)).use { reader ->
+            val line = reader.readLine()
+            if (line != null) {
+                line.trim().split(' ').forEach { numStr ->
+                    if (numStr.isNotEmpty()) {
+                        rawDataList.add(numStr.toFloat())
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Feature 데이터 읽기
+    val featureDataList = mutableListOf<Float>()
+    context.assets.open(featureFileName).use { stream ->
+        BufferedReader(InputStreamReader(stream)).use { reader ->
+            val line = reader.readLine()
+            if (line != null) {
+                line.trim().split(' ').forEach { numStr ->
+                    if (numStr.isNotEmpty()) {
+                        featureDataList.add(numStr.toFloat())
+                    }
+                }
+            }
+        }
+    }
+    
+    return SleepTestData(
+        rawDataList.toFloatArray(),
+        featureDataList.toFloatArray()
+    )
+}
+
+private fun findPrediction(logits: FloatArray): Pair<Int, FloatArray> {
+    if (logits.isEmpty()) {
+        return Pair(-1, FloatArray(0))
+    }
+
+    // 1. Logits에서 바로 ArgMax (가장 큰 값의 인덱스) 찾기
+    var maxIndex = 0
+    var maxValue = logits[0]
+    for (i in 1 until logits.size) {
+        if (logits[i] > maxValue) {
+            maxValue = logits[i]
+            maxIndex = i
+        }
+    }
+    
+    // 2. Softmax (확률 변환) 계산 - UI 표시용
+    val probabilities = softmax(logits)
+
+    // 3. prediction 인덱스와 확률 배열 반환
+    return Pair(maxIndex, probabilities)
+}
+
+private fun softmax(logits: FloatArray): FloatArray {
+    if (logits.isEmpty()) return FloatArray(0)
+    
+    val maxLogit = logits.maxOrNull() ?: 0f
+    val expValues = FloatArray(logits.size) { kotlin.math.exp(logits[it] - maxLogit) }
+    val sumExp = expValues.sum()
+    
+    if (sumExp == 0f || sumExp.isNaN() || sumExp.isInfinite()) {
+        // 합계가 유효하지 않은 경우, 균등 확률 또는 0으로 처리
+        return FloatArray(logits.size) { 1f / logits.size }
+    }
+    
+    return FloatArray(logits.size) { expValues[it] / sumExp }
+}
 
 class MainActivity : AppCompatActivity() {
 
@@ -55,6 +140,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnTestDreamt: Button
     private lateinit var btnFetchData: Button
     private lateinit var tvResult: TextView
+    private lateinit var etEpochIndex: EditText
+    private lateinit var progressBar: ProgressBar
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,6 +153,8 @@ class MainActivity : AppCompatActivity() {
         btnTestDreamt = findViewById(R.id.btn_test_dreamt)
         btnFetchData = findViewById(R.id.btn_fetch_data)
         tvResult = findViewById(R.id.tv_result)
+        etEpochIndex = findViewById(R.id.et_epoch_index)
+        progressBar = findViewById(R.id.progress_bar)
 
         // Health Connect 설치 확인
         val availability = HealthConnectClient.getSdkStatus(this)
@@ -488,194 +577,133 @@ class MainActivity : AppCompatActivity() {
     }
 
     // DreamT 샘플 데이터 로드 (텍스트 파일에서)
-    private fun loadDreamTSample(): Pair<Tensor, Tensor>? {
-        try {
-            Log.d(TAG, "DreamT 샘플 로드 시작")
-            
-            // === x_raw 로드: [1, 5, 1920, 4] ===
-            val rawText = assets.open("sample_raw1.txt").bufferedReader().use { it.readText() }
-            val rawValues = rawText.trim().split("\\s+".toRegex()).map { it.toFloat() }
-            
-            if (rawValues.size != 5 * 1920 * 4) {
-                Log.e(TAG, "x_raw 크기 오류: 예상 ${5 * 1920 * 4}, 실제 ${rawValues.size}")
-                return null
-            }
-            
-            val xRawData = rawValues.toFloatArray()
-            Log.d(TAG, "x_raw 로드 완료: ${xRawData.size}개 값")
-            
-            // === x_features 로드: [1, 5, 5] ===
-            val featuresText = assets.open("sample_features1.txt").bufferedReader().use { it.readText() }
-            val featuresValues = featuresText.trim().split("\\s+".toRegex()).map { it.toFloat() }
-            
-            if (featuresValues.size != 5 * 5) {
-                Log.e(TAG, "x_features 크기 오류: 예상 ${5 * 5}, 실제 ${featuresValues.size}")
-                return null
-            }
-            
-            val xFeaturesData = featuresValues.toFloatArray()
-            Log.d(TAG, "x_features 로드 완료: ${xFeaturesData.size}개 값")
-            
-            // === Tensor 생성 ===
-            // x_raw: [batch=5, sequence=1920, channels=4]
-            // 각 epoch를 배치의 샘플로 처리 (DualInputLSTMClassifier 기대 형식)
-            val xRaw = Tensor.fromBlob(xRawData, longArrayOf(5, 1920, 4))
-            
-            // x_features: [batch=5, features=5]
-            // 각 epoch의 features (5개 샘플, 각 5 features)
-            val xFeatures = Tensor.fromBlob(xFeaturesData, longArrayOf(5, 5))
-            
-            Log.d(TAG, "Tensor 생성 완료 - x_raw: [5, 1920, 4], x_features: [5, 5]")
-            
-            return Pair(xRaw, xFeatures)
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "DreamT 샘플 로드 실패", e)
-            return null
-        }
+    private suspend fun loadDreamTSample(context: Context, epochIndex: Int): Pair<Tensor, Tensor> {
+    Log.d(TAG, "DreamT 샘플 로드 시작 (Epoch: $epochIndex)")
+
+    val rawFileName = "sample_raw_epoch_$epochIndex.txt"
+    val featureFileName = "sample_features_epoch_$epochIndex.txt"
+
+    // 1. (IO) 1-epoch 데이터 로드 (이름 변경된 헬퍼 함수 호출)
+    val testData = withContext(Dispatchers.IO) {
+        // fetchSleepData -> loadSampleDataFromAssets (이름 충돌 해결)
+        loadSampleDataFromAssets(
+            context,
+            rawFileName,
+            featureFileName
+        )
     }
 
+    Log.d(TAG, "x_raw 로드 완료: ${testData.rawDataArray.size}개 값") // 7680
+    Log.d(TAG, "x_features 로드 완료: ${testData.featureDataArray.size}개 값") // 5
+
+    // 2. 1-Epoch 텐서로 Reshape (Batch=1)
+    val xRaw = Tensor.fromBlob(
+        testData.rawDataArray,
+        longArrayOf(1, 1920, 4) // (B, L, C)
+    )
+    val xFeatures = Tensor.fromBlob(
+        testData.featureDataArray,
+        longArrayOf(1, 5) // (B, F)
+    )
+
+    Log.d(TAG, "Tensor 생성 완료 - x_raw: [1, 1920, 4], x_features: [1, 5]")
+    return Pair(xRaw, xFeatures)
+}
+
     // DreamT 샘플로 테스트
-    private fun testWithDreamTSample() {
-        lifecycleScope.launch(Dispatchers.Default) {
-            try {
-                withContext(Dispatchers.Main) {
-                    tvResult.text = "🧪 DreamT 샘플 데이터로 테스트하는 중...\n\n" +
-                            "5개 epoch (2.5분 분량) 로드 중..."
-                }
-                
-                // 모델 체크
-                if (sleepModel == null) {
-                    withContext(Dispatchers.Main) {
-                        tvResult.text = "❌ 모델이 로드되지 않았습니다.\n\n" +
-                                "잠시 기다렸다가 다시 시도해주세요."
-                    }
-                    return@launch
-                }
-                
-                // DreamT 샘플 로드
-                val sample = loadDreamTSample()
-                
-                if (sample == null) {
-                    withContext(Dispatchers.Main) {
-                        tvResult.text = "❌ DreamT 샘플을 로드할 수 없습니다.\n\n" +
-                                "app/src/main/assets/ 폴더에\n" +
-                                "- sample_raw1.txt\n" +
-                                "- sample_features1.txt\n" +
-                                "파일이 있는지 확인해주세요."
-                    }
-                    return@launch
-                }
-                
-                val (xRaw, xFeatures) = sample
-                
-                withContext(Dispatchers.Main) {
-                    tvResult.text = "✅ 데이터 로드 완료!\n\n" +
-                            "📊 x_raw: [5, 1920, 4]\n" +
-                            "   (5 epochs × 1920 samples × 4 channels)\n\n" +
-                            "📊 x_features: [5, 5]\n" +
-                            "   (5 epochs × 5 features)\n\n" +
-                            "🔄 모델 추론 실행 중..."
-                }
-                
-                // 모델 추론
-                Log.d(TAG, "모델 추론 시작 (5 epochs)")
-                
-                val outputTensor = sleepModel!!.forward(
+   private fun testWithDreamTSample() {
+    if (sleepModel == null) {
+        Log.e(TAG, "모델이 로드되지 않았습니다.")
+        tvResult.text = "⚠️ 모델 로드 실패!"
+        return
+    }
+
+    // EditText에서 테스트할 Epoch 인덱스 읽기
+    val epochIndex = etEpochIndex.text.toString().toIntOrNull() ?: 0
+    
+    // 유효성 검사
+    if (epochIndex < 0 || epochIndex > 1047) {
+        tvResult.text = "⚠️ Epoch 번호는 0~1047 사이여야 합니다.\n현재 입력값: $epochIndex"
+        return
+    }
+    
+    Log.d(TAG, "Epoch $epochIndex 테스트 시작...")
+    tvResult.text = "🔄 DreamT (Epoch $epochIndex / 1047) 샘플 테스트 중..."
+    progressBar.visibility = View.VISIBLE
+
+    lifecycleScope.launch(Dispatchers.IO) {
+        try {
+            // 1. (IO) 1-Epoch 데이터 로드 (선택한 인덱스 전달)
+            val (xRaw, xFeatures) = loadDreamTSample(this@MainActivity, epochIndex)
+
+            // 2. (Default) 모델 추론
+            Log.d(TAG, "모델 추론 시작 (Batch=1 / 1 epoch)")
+            val outputTensor = withContext(Dispatchers.Default) {
+                sleepModel!!.forward(
                     IValue.from(xRaw),
                     IValue.from(xFeatures)
                 ).toTensor()
+            }
+            
+            // 3. (Default) 결과 분석
+            val scores = outputTensor.dataAsFloatArray // 4개짜리 로짓
+            
+            // ★★★ (수정 3) 정의된 findPrediction 함수 호출
+            val (prediction, probabilities) = findPrediction(scores) 
+
+            // 4. (Main) UI 업데이트
+            withContext(Dispatchers.Main) {
+                val resultText = when (prediction) {
+                    0 -> "W (깨어있음) 🥱"
+                    1 -> "Light (얕은 수면) 😌"
+                    2 -> "N3 (깊은 수면) 🛌"
+                    3 -> "REM (렘수면) 🧠"
+                    else -> "판독 불가 ⚠️"
+                }
                 
-                val logits = outputTensor.dataAsFloatArray
-                Log.d(TAG, "추론 결과 (로짓): ${logits.contentToString()}")
-                Log.d(TAG, "출력 크기: ${logits.size}개")
-                
-                // 수면 단계 분류 (Python 학습 시 매핑과 동일)
-                // 인덱스 0: Wake, 1: Light, 2: Deep, 3: REM
-                val sleepStages = arrayOf("각성 상태", "얕은 수면", "깊은 수면", "REM 수면")
-                
-                // 가운데 epoch만 추출 (슬라이딩 윈도우 방식)
-                val centerLogits = if (logits.size == 20) {
-                    // 5개 epoch 출력 중 가운데(epoch 2)만 사용
-                    FloatArray(4) { i -> logits[8 + i] }
+                val probText = probabilities.mapIndexed { index, prob ->
+                    "${index}: ${String.format("%.2f", prob * 100)}%"
+                }.joinToString(" | ")
+
+                tvResult.text = """
+                    ✅ [Epoch $epochIndex / 1047] 예측: $resultText
+                    
+                    📊 신뢰도: $probText
+                    
+                    🔢 Raw Scores: ${scores.joinToString()}
+                    
+                    💡 참고: 전체 1048개 epoch 중 하나를 분석한 결과입니다.
+                """.trimIndent()
+                progressBar.visibility = View.GONE
+                Log.d(TAG, "추론 결과 (로짓): ${scores.joinToString()}")
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "DreamT 테스트 실패", e)
+            withContext(Dispatchers.Main) {
+                if (e is java.io.FileNotFoundException) {
+                    tvResult.text = """
+                        ❌ 테스트 실패: Epoch $epochIndex 파일을 찾을 수 없습니다.
+                        
+                        📋 필요한 파일:
+                        - sample_raw_epoch_$epochIndex.txt
+                        - sample_features_epoch_$epochIndex.txt
+                        
+                        🔧 해결 방법:
+                        1. Colab에서 EPOCH_TO_TEST = $epochIndex 설정
+                        2. 파일 생성 (총 1048개 중 선택)
+                        3. assets 폴더에 추가
+                        
+                        💡 팁: 자주 테스트할 epoch만 미리 생성하세요.
+                    """.trimIndent()
                 } else {
-                    logits
+                    tvResult.text = "❌ 테스트 실패:\n${e.message}"
                 }
-                
-                Log.d(TAG, "가운데 epoch 로짓: ${centerLogits.contentToString()}")
-                
-                // 결과 표시
-                withContext(Dispatchers.Main) {
-                    val resultText = StringBuilder()
-                    resultText.append("🧪 DreamT 실제 데이터 테스트 결과\n")
-                    resultText.append("════════════════════════\n\n")
-                    resultText.append("📊 슬라이딩 윈도우 분석:\n")
-                    resultText.append("- 입력: 5개 epoch (2.5분 컨텍스트)\n")
-                    resultText.append("  [epoch 0] [epoch 1] [★epoch 2★] [epoch 3] [epoch 4]\n")
-                    resultText.append("- 출력: 가운데 epoch 2 (30초) 예측\n")
-                    resultText.append("- 센서: PPG, 3축 가속도계 (64Hz)\n\n")
-                    
-                    if (centerLogits.size == 4) {
-                        // 가운데 epoch 예측
-                        val probabilities = softmax(centerLogits)
-                        val maxIndex = probabilities.indices.maxByOrNull { probabilities[it] } ?: 0
-                        val maxProbability = probabilities[maxIndex]
-                        
-                        resultText.append("🎯 가운데 epoch (30초) 예측:\n\n")
-                        resultText.append("🌙 수면 단계:\n")
-                        resultText.append("   ${sleepStages[maxIndex]}\n\n")
-                        resultText.append("📊 신뢰도:\n")
-                        resultText.append("   ${String.format("%.1f", maxProbability * 100)}%\n\n")
-                        resultText.append("════════════════════════\n")
-                        resultText.append("각 단계별 확률:\n\n")
-                        
-                        for (i in probabilities.indices) {
-                            val emoji = when(i) {
-                                0 -> "👀" // 각성
-                                1 -> "😌" // 얕은 수면
-                                2 -> "😴" // 깊은 수면
-                                3 -> "💭" // REM
-                                else -> "•"
-                            }
-                            val barLength = (probabilities[i] * 20).toInt()
-                            val bar = "█".repeat(barLength) + "░".repeat(20 - barLength)
-                            
-                            resultText.append("$emoji ${sleepStages[i]}:\n")
-                            resultText.append("   $bar\n")
-                            resultText.append("   ${String.format("%.1f", probabilities[i] * 100)}%\n\n")
-                        }
-                        
-                        resultText.append("════════════════════════\n")
-                        resultText.append("✅ 분석 완료!\n\n")
-                        resultText.append("💡 슬라이딩 윈도우 방식:\n")
-                        resultText.append("   앞뒤 2개 epoch의 컨텍스트를 활용해\n")
-                        resultText.append("   가운데 1개 epoch (30초)만 예측합니다.\n")
-                        resultText.append("   (77% 정확도 챔피언 모델)")
-                        
-                    } else {
-                        // 예상치 못한 출력 형식
-                        resultText.append("⚠️ 예상치 못한 출력 크기\n")
-                        resultText.append("출력: ${logits.size}개 값\n")
-                        resultText.append("예상: 20개 (5 epochs × 4 classes)\n\n")
-                        resultText.append("전체 로짓 값:\n")
-                        logits.forEachIndexed { index, value ->
-                            resultText.append("[$index]: ${String.format("%.4f", value)}\n")
-                        }
-                    }
-                    
-                    tvResult.text = resultText.toString()
-                }
-                
-            } catch (e: Exception) {
-                Log.e(TAG, "DreamT 테스트 실패", e)
-                withContext(Dispatchers.Main) {
-                    tvResult.text = "❌ 테스트 실패\n\n" +
-                            "오류: ${e.message}\n\n" +
-                            "스택 트레이스:\n${e.stackTraceToString()}"
-                }
+                progressBar.visibility = View.GONE
             }
         }
     }
+}
 
     // 수면 데이터 가져오기
     private suspend fun fetchSleepData() {
